@@ -35,6 +35,7 @@ import org.slf4j.LoggerFactory;
 import javax.naming.AuthenticationNotSupportedException;
 import javax.naming.NamingException;
 import javax.naming.ldap.LdapContext;
+import javax.naming.ldap.Rdn;
 
 /**
  * An LDAP {@link org.apache.shiro.realm.Realm Realm} implementation utilizing Sun's/Oracle's
@@ -239,11 +240,14 @@ public class DefaultLdapRealm extends AuthorizingRealm {
 
         int prefixLength = prefix != null ? prefix.length() : 0;
         int suffixLength = suffix != null ? suffix.length() : 0;
-        StringBuilder sb = new StringBuilder(prefixLength + principal.length() + suffixLength);
+        //the principal is a single attribute value within the resulting name, so it is encoded
+        //to keep any characters that are significant in a Distinguished Name within that value:
+        String value = Rdn.escapeValue(principal);
+        StringBuilder sb = new StringBuilder(prefixLength + value.length() + suffixLength);
         if (prefixLength > 0) {
             sb.append(prefix);
         }
-        sb.append(principal);
+        sb.append(value);
         if (suffixLength > 0) {
             sb.append(suffix);
         }

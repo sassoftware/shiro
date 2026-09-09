@@ -27,6 +27,8 @@ import org.junit.Test;
 
 import javax.naming.NamingException;
 import javax.naming.ldap.LdapContext;
+import javax.naming.ldap.LdapName;
+import javax.naming.ldap.Rdn;
 
 import java.util.UUID;
 
@@ -175,5 +177,127 @@ public class DefaultLdapRealmTest {
         String principal = "foo";
         String userDn = realm.getUserDn(principal);
         assertEquals(principal, userDn);
+    }
+
+    private static final String TEMPLATE = "uid={0},ou=users,dc=mycompany,dc=com";
+
+    /**
+     * The number of name components in the configured userDnTemplate.
+     */
+    private static final int TEMPLATE_COMPONENT_COUNT = 4;
+
+    /**
+     * Principals containing characters that carry meaning in a Distinguished Name.
+     */
+    private static final String[] RESERVED_CHARACTER_PRINCIPALS = {
+            "jsmith,ou=admins",
+            "jsmith+uid=admin",
+            "jsmith=admin",
+            "jsmith;ou=admins",
+            "back\\slash",
+            "quo\"te",
+            "angle<br>ackets",
+            " leadingSpace",
+            "trailingSpace ",
+            "#leadingNumberSign"
+    };
+
+    /**
+     * Returns the value of the most specific component of the given name.
+     */
+    private Object leafValue(String userDn) throws Exception {
+        LdapName name = new LdapName(userDn);
+        return name.getRdn(name.size() - 1).getValue();
+    }
+
+    /**
+     * An ordinary principal is substituted into the template unchanged.
+     */
+    @Test
+    public void testGetUserDnLeavesOrdinaryPrincipalUnchanged() throws Exception {
+        realm.setUserDnTemplate(TEMPLATE);
+
+        String userDn = realm.getUserDn("jsmith");
+
+        assertEquals("uid=jsmith,ou=users,dc=mycompany,dc=com", userDn);
+        assertEquals(TEMPLATE_COMPONENT_COUNT, new LdapName(userDn).size());
+        assertEquals("jsmith", leafValue(userDn));
+    }
+
+    /**
+     * The constructed User DN retains the component structure of the configured template,
+     * and the submitted principal remains a single attribute value within it.
+     */
+    @Test
+    public void testGetUserDnPreservesTemplateStructure() throws Exception {
+        realm.setUserDnTemplate(TEMPLATE);
+        String principal = "jsmith,ou=admins";
+
+        String userDn = realm.getUserDn(principal);
+
+        assertEquals("User DN gained or lost components relative to the template: " + userDn,
+                TEMPLATE_COMPONENT_COUNT, new LdapName(userDn).size());
+        assertEquals("Submitted principal was not preserved as a single attribute value: " + userDn,
+                principal, leafValue(userDn));
+    }
+
+    /**
+     * Template structure is retained for every principal containing characters that are
+     * significant in a Distinguished Name.
+     */
+    @Test
+    public void testGetUserDnPreservesTemplateStructureForReservedCharacters() throws Exception {
+        realm.setUserDnTemplate(TEMPLATE);
+
+        for (String principal : RESERVED_CHARACTER_PRINCIPALS) {
+            String userDn = realm.getUserDn(principal);
+            LdapName name;
+            try {
+                name = new LdapName(userDn);
+            } catch (Exception e) {
+                fail("User DN for principal [" + principal + "] is not a well formed name: "
+                        + userDn + " (" + e + ")");
+                return;
+            }
+            assertEquals("Component count changed for principal [" + principal + "]: " + userDn,
+                    TEMPLATE_COMPONENT_COUNT, name.size());
+            assertEquals("Principal not preserved as a single attribute value [" + principal + "]: " + userDn,
+                    principal, name.getRdn(name.size() - 1).getValue());
+        }
+    }
+
+    /**
+     * The value substituted into the template is encoded such that it round trips back to the
+     * originally submitted principal.
+     */
+    @Test
+    public void testGetUserDnEncodesSubstitutedValue() throws Exception {
+        realm.setUserDnTemplate(TEMPLATE);
+        String principal = "jsmith,ou=admins";
+
+        String userDn = realm.getUserDn(principal);
+
+        assertEquals("uid=" + Rdn.escapeValue(principal) + ",ou=users,dc=mycompany,dc=com", userDn);
+    }
+
+    /**
+     * The DN handed to the {@link LdapContextFactory} during authentication retains the
+     * structure of the configured template.
+     */
+    @Test
+    public void testUserDnTemplateSubstitutionPreservesStructure() throws Exception {
+        realm.setUserDnTemplate(TEMPLATE);
+        LdapContextFactory factory = createMock(LdapContextFactory.class);
+        realm.setContextFactory(factory);
+
+        String principal = "jsmith,ou=admins";
+        String expectedPrincipal = "uid=" + Rdn.escapeValue(principal) + ",ou=users,dc=mycompany,dc=com";
+
+        expect(factory.getLdapContext(eq((Object) expectedPrincipal), isA(Object.class)))
+                .andReturn(createNiceMock(LdapContext.class));
+        replay(factory);
+
+        realm.getAuthenticationInfo(new UsernamePasswordToken(principal, "secret"));
+        verify(factory);
     }
 }
